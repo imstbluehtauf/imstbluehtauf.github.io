@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Imst blüht auf — 3D-Stadtkarte · Anmeldung</title>
+<link rel="icon" href="zeichen.png">
+<style>
+:root{--gruen:#1F9D55;--text:#1d2420;--leise:#5f6b64;--rand:#dfe5e1}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+  font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--text);
+  background:linear-gradient(160deg,#eef6f1 0%,#f7f4ec 60%,#f1ece4 100%)}
+.karte{width:min(400px,92vw);background:#fff;border:1px solid var(--rand);border-radius:16px;
+  padding:28px 28px 22px;box-shadow:0 12px 40px rgba(20,40,30,.10)}
+.karte img{display:block;width:180px;max-width:70%;margin:0 auto 14px}
+h1{font-size:18px;margin:0 0 4px;text-align:center}
+.unter{color:var(--leise);font-size:13px;text-align:center;margin:0 0 20px}
+label{display:block;font-size:13px;font-weight:600;margin:12px 0 5px}
+input[type=text],input[type=password]{width:100%;padding:11px 12px;border:1px solid var(--rand);border-radius:10px;
+  font:inherit;background:#fbfcfb}
+input:focus{outline:2px solid rgba(31,157,85,.35);border-color:var(--gruen)}
+.merken{display:flex;gap:8px;align-items:center;margin:14px 0 4px;font-size:13px;color:var(--leise)}
+button{width:100%;margin-top:14px;padding:12px;border:0;border-radius:10px;background:var(--gruen);color:#fff;
+  font:inherit;font-weight:650;cursor:pointer}
+button:disabled{opacity:.6;cursor:wait}
+.fehler{color:#b3261e;font-size:13px;min-height:18px;margin-top:10px;text-align:center}
+.lade{display:none;margin-top:16px}
+.balken{height:6px;background:#e7ece9;border-radius:6px;overflow:hidden}
+.balken div{height:100%;width:0;background:var(--gruen);transition:width .2s}
+.ladetext{font-size:12px;color:var(--leise);margin-top:6px;text-align:center}
+.fuss{margin-top:18px;font-size:11px;color:var(--leise);text-align:center}
+</style>
+</head>
+<body>
+<main class="karte">
+  <img src="logo.png" alt="Imst blüht auf">
+  <h1>3D-Stadtkarte Imst</h1>
+  <p class="unter">Themen und Ideen aus den Protokollen der Initiative.<br>Bitte anmelden.</p>
+  <form id="f" autocomplete="on">
+    <label for="u">Benutzername</label>
+    <input id="u" type="text" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+    <label for="p">Passwort</label>
+    <input id="p" type="password" name="password" autocomplete="current-password" required>
+    <label class="merken"><input id="m" type="checkbox" checked> Auf diesem Gerät angemeldet bleiben</label>
+    <button id="b" type="submit">Anmelden</button>
+    <div class="fehler" id="e"></div>
+  </form>
+  <div class="lade" id="l">
+    <div class="balken"><div id="lb"></div></div>
+    <div class="ladetext" id="lt">Karte wird geladen …</div>
+  </div>
+  <div class="fuss">Die Karte ist verschlüsselt (AES-256) und wird erst in deinem Browser entschlüsselt.
+    Rund 10,7 MB beim ersten Öffnen.</div>
+</main>
+<script>
+(() => {
+"use strict";
+const SPEICHER = "imst_zugang";
+const $ = id => document.getElementById(id);
+const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const enc = new TextEncoder();
+
+async function sha256hex(t){
+  const h = await crypto.subtle.digest("SHA-256", enc.encode(t));
+  return [...new Uint8Array(h)].map(x => x.toString(16).padStart(2,"0")).join("");
+}
+
+async function kontoEntsperren(benutzer, passwort){
+  const r = await fetch("konten.json", {cache:"no-cache"});
+  const konten = (await r.json()).konten;
+  const name = benutzer.trim().toLowerCase();
+  const k = konten[await sha256hex(name)];
+  if(!k) throw new Error("falsch");
+  const basis = await crypto.subtle.importKey("raw", enc.encode(passwort), "PBKDF2", false, ["deriveKey"]);
+  const salz = new Uint8Array([...b64(k.salz), ...enc.encode(name)]);
+  const kek = await crypto.subtle.deriveKey({name:"PBKDF2", hash:"SHA-256", salt:salz, iterations:k.runden},
+    basis, {name:"AES-GCM", length:256}, false, ["decrypt"]);
+  try{
+    const cek = await crypto.subtle.decrypt({name:"AES-GCM", iv:b64(k.iv), additionalData:enc.encode("imst-konto")},
+      kek, b64(k.schluessel));
+    return new Uint8Array(cek);
+  }catch(_){ throw new Error("falsch"); }
+}
+
+async function ladenMitFortschritt(){
+  const r = await fetch("karte.bin", {cache:"no-cache"});
+  if(!r.ok) throw new Error("Die Karte konnte nicht geladen werden (" + r.status + ").");
+  const gesamt = +r.headers.get("content-length") || 0;
+  const leser = r.body.getReader(); const teile = []; let n = 0;
+  for(;;){
+    const {done, value} = await leser.read(); if(done) break;
+    teile.push(value); n += value.length;
+    if(gesamt){ const p = Math.min(100, Math.round(n / gesamt * 100)); $("lb").style.width = p + "%";
+      $("lt").textContent = "Karte wird geladen … " + p + " %"; }
+  }
+  const alles = new Uint8Array(n); let o = 0; for(const t of teile){ alles.set(t, o); o += t.length; }
+  return alles;
+}
+
+async function karteOeffnen(cekRoh){
+  $("l").style.display = "block";
+  const blob = await ladenMitFortschritt();
+  $("lt").textContent = "Karte wird entschlüsselt …";
+  const cek = await crypto.subtle.importKey("raw", cekRoh, "AES-GCM", false, ["decrypt"]);
+  let roh;
+  try{
+    roh = await crypto.subtle.decrypt({name:"AES-GCM", iv:blob.slice(0,12), additionalData:enc.encode("imst-karte")},
+      cek, blob.slice(12));
+  }catch(_){ throw new Error("abgelaufen"); }
+  const strom = new Blob([roh]).stream().pipeThrough(new DecompressionStream("gzip"));
+  const html = await new Response(strom).text();
+  history.replaceState(null, "", location.pathname);
+  document.open(); document.write(html); document.close();
+}
+
+function merken(cekRoh, dauerhaft){
+  const s = btoa(String.fromCharCode(...cekRoh));
+  try{ (dauerhaft ? localStorage : sessionStorage).setItem(SPEICHER, s); }catch(_){}
+}
+function gemerkt(){
+  try{ return localStorage.getItem(SPEICHER) || sessionStorage.getItem(SPEICHER); }catch(_){ return null; }
+}
+function vergessen(){ try{ localStorage.removeItem(SPEICHER); sessionStorage.removeItem(SPEICHER); }catch(_){} }
+
+async function anmelden(benutzer, passwort, dauerhaft){
+  $("b").disabled = true; $("e").textContent = ""; $("b").textContent = "Prüfe …";
+  try{
+    const cek = await kontoEntsperren(benutzer, passwort);
+    merken(cek, dauerhaft);
+    $("f").style.display = "none";
+    await karteOeffnen(cek);
+  }catch(err){
+    $("f").style.display = ""; $("l").style.display = "none";
+    $("e").textContent = err.message === "falsch" ? "Benutzername oder Passwort stimmt nicht." : err.message;
+    $("b").disabled = false; $("b").textContent = "Anmelden";
+  }
+}
+
+$("f").addEventListener("submit", ev => { ev.preventDefault(); anmelden($("u").value, $("p").value, $("m").checked); });
+
+(async function start(){
+  if(!window.crypto || !crypto.subtle || !window.DecompressionStream){
+    $("e").textContent = "Dieser Browser ist zu alt. Bitte Chrome, Edge, Firefox oder Safari in aktueller Fassung verwenden.";
+    $("b").disabled = true; return;
+  }
+  // Schnell-Anmeldung: …/#u=benutzer&p=passwort (der Teil nach # wird nie an den Server geschickt)
+  const h = new URLSearchParams(location.hash.slice(1));
+  if(h.get("u") && h.get("p")){
+    $("u").value = h.get("u"); $("p").value = h.get("p");
+    history.replaceState(null, "", location.pathname);
+    return anmelden(h.get("u"), h.get("p"), true);
+  }
+  const s = gemerkt();
+  if(s){
+    $("f").style.display = "none";
+    try{ await karteOeffnen(b64(s)); }
+    catch(err){ vergessen(); $("f").style.display = ""; $("l").style.display = "none";
+      $("e").textContent = err.message === "abgelaufen" ? "Die Karte wurde erneuert — bitte neu anmelden." : err.message; }
+  }
+})();
+})();
+</script>
+</body>
+</html>
