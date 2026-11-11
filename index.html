@@ -58,6 +58,7 @@ button:disabled{opacity:.6;cursor:wait}
 (() => {
 "use strict";
 const SPEICHER = "imst_zugang";
+const ZIELE = ["#leitbild", "#karte"];  // Sprungziele, die nach der Anmeldung erhalten bleiben
 const $ = id => document.getElementById(id);
 const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 const enc = new TextEncoder();
@@ -111,7 +112,7 @@ async function karteOeffnen(cekRoh){
   }catch(_){ throw new Error("abgelaufen"); }
   const strom = new Blob([roh]).stream().pipeThrough(new DecompressionStream("gzip"));
   const html = await new Response(strom).text();
-  history.replaceState(null, "", location.pathname);
+  history.replaceState(null, "", location.pathname + (ZIELE.includes(location.hash) ? location.hash : ""));
   document.open(); document.write(html); document.close();
 }
 
@@ -149,7 +150,7 @@ $("f").addEventListener("submit", ev => { ev.preventDefault(); anmelden($("u").v
   const h = new URLSearchParams(location.hash.slice(1));
   if(h.get("u") && h.get("p")){
     $("u").value = h.get("u"); $("p").value = h.get("p");
-    history.replaceState(null, "", location.pathname);
+    history.replaceState(null, "", location.pathname + (h.get("ziel") ? "#" + h.get("ziel") : ""));
     return anmelden(h.get("u"), h.get("p"), true);
   }
   const s = gemerkt();
